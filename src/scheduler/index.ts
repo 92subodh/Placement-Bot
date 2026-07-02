@@ -41,6 +41,31 @@ export const startScheduler = () => {
           const details = await ApiService.fetchPostDetails(post.id);
           const plainTextBody = HtmlParserService.parseHtml(details.body || '');
 
+          // Parse the relative time string (e.g. "11 hours ago", "2 days ago")
+          const parseRelativeTime = (timeStr: string): Date => {
+            const now = new Date();
+            if (!timeStr) return now;
+            
+            const match = timeStr.match(/(\d+)\s+(sec|secs|second|seconds|min|mins|minute|minutes|hour|hours|day|days|month|months|year|years)\s+ago/i);
+            // If it's a hardcoded date instead of relative, try standard parsing
+            if (!match) {
+              const d = new Date(timeStr);
+              return isNaN(d.getTime()) ? now : d;
+            }
+
+            const amount = parseInt(match[1], 10);
+            const unit = match[2].toLowerCase();
+
+            if (unit.startsWith('sec')) now.setSeconds(now.getSeconds() - amount);
+            else if (unit.startsWith('min')) now.setMinutes(now.getMinutes() - amount);
+            else if (unit.startsWith('hour')) now.setHours(now.getHours() - amount);
+            else if (unit.startsWith('day')) now.setDate(now.getDate() - amount);
+            else if (unit.startsWith('month')) now.setMonth(now.getMonth() - amount);
+            else if (unit.startsWith('year')) now.setFullYear(now.getFullYear() - amount);
+
+            return now;
+          };
+
           // Save post to DB
           const savedPost = await prisma.post.create({
             data: {
@@ -48,7 +73,7 @@ export const startScheduler = () => {
               title: details.title,
               content: plainTextBody,
               author: details.userEmail || details.userId || 'Admin',
-              portalCreatedAt: new Date(details.createdAt || post.createdAt),
+              portalCreatedAt: parseRelativeTime(post.createdAt || details.createdAt),
             },
           });
 
