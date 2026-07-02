@@ -9,22 +9,9 @@ import { logger } from '../utils/logger';
 
 // Helper: send message + attachments to a single chat
 const sendPostToChat = async (chatId: string, message: string, filesToSend: { path: string; name: string }[]) => {
-  if (filesToSend.length === 0) {
-    await bot!.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-  } else {
-    // Telegram caption limit is 1024 characters. Truncate if needed.
-    let caption = message;
-    if (caption.length > 1000) {
-      caption = caption.substring(0, 1000) + '...\n\n_[Truncated due to length limit]_';
-    }
-    
-    // Send first file with the full message as its caption
-    await bot!.sendDocument(chatId, filesToSend[0].path, { caption: caption, parse_mode: 'Markdown' });
-    
-    // Send remaining files with just their names
-    for (let i = 1; i < filesToSend.length; i++) {
-      await bot!.sendDocument(chatId, filesToSend[i].path, { caption: filesToSend[i].name });
-    }
+  await bot!.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  for (const file of filesToSend) {
+    await bot!.sendDocument(chatId, file.path, { caption: file.name });
   }
 };
 
@@ -58,7 +45,7 @@ export const startScheduler = () => {
           const parseRelativeTime = (timeStr: string): Date => {
             const now = new Date();
             if (!timeStr) return now;
-            
+
             const match = timeStr.match(/(\d+)\s+(sec|secs|second|seconds|min|mins|minute|minutes|hour|hours|day|days|month|months|year|years)\s+ago/i);
             // If it's a hardcoded date instead of relative, try standard parsing
             if (!match) {
@@ -135,7 +122,8 @@ export const startScheduler = () => {
             `📢 *New Placement Update*\n\n` +
             `🏢 *Title*\n${savedPost.title}\n\n` +
             `📅 *Posted*\n${savedPost.portalCreatedAt.toISOString().split('T')[0]}\n\n` +
-            `📝 *Details*\n${displayContent}`;
+            `📝 *Details*\n${displayContent}\n\n` +
+            `[🔗 View Original Post on Portal](https://www.aitplacements.in/)`;
 
           // Broadcast to channel first
           const channelId = process.env.CHANNEL_ID;

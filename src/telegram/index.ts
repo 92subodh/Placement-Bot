@@ -17,10 +17,10 @@ if (!bot) {
 
   // Set bot commands menu (appears as the "/" menu button in Telegram)
   bot.setMyCommands([
-    { command: 'start',   description: '🎓 Register and start receiving notifications' },
-    { command: 'latest',  description: '📋 View the 5 most recent placement posts' },
-    { command: 'status',  description: '🤖 Check bot health and statistics' },
-    { command: 'help',    description: '❓ Show all available commands' },
+    { command: 'start', description: '🎓 Register and start receiving notifications' },
+    { command: 'latest', description: '📋 View the 5 most recent placement posts' },
+    { command: 'status', description: '🤖 Check bot health and statistics' },
+    { command: 'help', description: '❓ Show all available commands' },
   ]).then(() => logger.info('Bot command menu registered.'))
     .catch((e) => logger.error('Failed to set bot commands:', e));
 
@@ -59,31 +59,27 @@ if (!bot) {
       `📢 *Placement Update*\n\n` +
       `🏢 *Title*\n${post.title}\n\n` +
       `📅 *Posted*\n${post.portalCreatedAt.toISOString().split('T')[0]}\n\n` +
-      `📝 *Details*\n${displayContent}`;
+      `📝 *Details*\n${displayContent}\n\n` +
+      `[🔗 View Original Post on Portal](https://www.aitplacements.in/)`;
 
-    if (post.attachments.length === 0) {
-      await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-    } else {
-      let caption = message;
-      if (caption.length > 1000) {
-        caption = caption.substring(0, 1000) + '...\n\n_[Truncated due to length limit]_';
-      }
+    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
 
-      for (let i = 0; i < post.attachments.length; i++) {
-        const att = post.attachments[i];
+    // Send attachments if any
+    if (post.attachments.length > 0) {
+      await bot.sendMessage(chatId, `📎 *${post.attachments.length} Attachment(s):*`, { parse_mode: 'Markdown' });
+      for (const att of post.attachments) {
         try {
+          // Use saved local path if file still exists on disk
           let filePath = att.localFilePath && fs.existsSync(att.localFilePath) ? att.localFilePath : null;
+
           if (!filePath) {
+            // File not on disk — re-download from portal
             logger.info(`Re-downloading missing attachment: ${att.originalFileName}`);
             filePath = await AttachmentService.getOrDownloadAttachment(att.portalAttachmentId, att.originalFileName);
           }
 
           if (filePath) {
-            if (i === 0) {
-              await bot.sendDocument(chatId, filePath, { caption: caption, parse_mode: 'Markdown' });
-            } else {
-              await bot.sendDocument(chatId, filePath, { caption: att.originalFileName });
-            }
+            await bot.sendDocument(chatId, filePath, { caption: att.originalFileName });
           } else {
             await bot.sendMessage(chatId, `📎 Could not retrieve: ${att.originalFileName}`);
           }
