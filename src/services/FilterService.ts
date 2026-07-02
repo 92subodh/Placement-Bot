@@ -17,8 +17,6 @@ export class FilterService {
     const searchString = `${title} ${plainTextBody}`.toLowerCase();
 
     for (const user of allUsers) {
-      if (!user.isActive && !user.isAdmin) continue; // Optional active check if implemented, currently skipping inactive? Oh wait, we didn't add isActive to schema. Let's assume all users in DB are active.
-
       if (user.subscriptions.length === 0) {
         // No subscriptions = receive all posts
         matchedUserIds.push(user.id);
