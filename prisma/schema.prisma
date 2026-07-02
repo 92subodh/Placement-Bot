@@ -48,6 +48,7 @@ model Attachment {
   mimeType           String
   fileSize           Int
   status             String
+  localFilePath      String?  // Path on disk (null if not yet downloaded)
   createdAtPortal    DateTime
   updatedAtPortal    DateTime
   post               Post     @relation(fields: [postId], references: [id])

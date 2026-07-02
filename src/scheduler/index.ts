@@ -54,13 +54,15 @@ export const startScheduler = () => {
 
           // Fetch & save attachment metadata
           const attachmentData = await ApiService.fetchAttachments(details.id);
-          const localFilesToCleanup: string[] = [];
           const filesToSend: { path: string; name: string }[] = [];
 
           if (attachmentData?.attachments?.length > 0) {
             logger.info(`Found ${attachmentData.attachments.length} attachment(s) for post "${savedPost.title}"`);
             for (const att of attachmentData.attachments) {
-              // Save metadata to DB
+              // Download (or reuse if already on disk)
+              const localPath = await AttachmentService.getOrDownloadAttachment(att.id, att.originalFileName);
+
+              // Save metadata + local path to DB
               await prisma.attachment.create({
                 data: {
                   portalAttachmentId: att.id,
@@ -70,21 +72,16 @@ export const startScheduler = () => {
                   mimeType: att.fileType,
                   fileSize: att.fileSize,
                   status: att.status,
+                  localFilePath: localPath,
                   createdAtPortal: new Date(att.createdAt || Date.now()),
                   updatedAtPortal: new Date(att.updatedAt || Date.now()),
                 },
               });
 
-              // Download file if bot is active
-              if (bot) {
-                logger.info(`Downloading attachment: ${att.originalFileName}`);
-                const localPath = await AttachmentService.downloadAttachment(att.id, att.originalFileName);
-                if (localPath) {
-                  filesToSend.push({ path: localPath, name: att.originalFileName });
-                  localFilesToCleanup.push(localPath);
-                } else {
-                  logger.warn(`Failed to download attachment: ${att.originalFileName}`);
-                }
+              if (localPath) {
+                filesToSend.push({ path: localPath, name: att.originalFileName });
+              } else {
+                logger.warn(`Failed to download attachment: ${att.originalFileName}`);
               }
             }
           } else {
@@ -131,11 +128,6 @@ export const startScheduler = () => {
                 }
               }
             }
-          }
-
-          // Cleanup local temp files AFTER all sends complete
-          for (const file of localFilesToCleanup) {
-            AttachmentService.cleanupFile(file);
           }
 
           logger.info(`Finished processing post "${savedPost.title}"`);

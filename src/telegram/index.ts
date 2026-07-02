@@ -1,3 +1,4 @@
+import fs from 'fs';
 import TelegramBot from 'node-telegram-bot-api';
 import { prisma } from '../database';
 import { ApiService } from '../api/ApiService';
@@ -63,10 +64,19 @@ if (!bot) {
       await bot.sendMessage(chatId, `📎 *${post.attachments.length} Attachment(s):*`, { parse_mode: 'Markdown' });
       for (const att of post.attachments) {
         try {
-          const localPath = await AttachmentService.downloadAttachment(att.portalAttachmentId, att.originalFileName);
-          if (localPath) {
-            await bot.sendDocument(chatId, localPath, { caption: att.originalFileName });
-            AttachmentService.cleanupFile(localPath);
+          // Use saved local path if file still exists on disk
+          let filePath = att.localFilePath && fs.existsSync(att.localFilePath) ? att.localFilePath : null;
+
+          if (!filePath) {
+            // File not on disk — re-download from portal
+            logger.info(`Re-downloading missing attachment: ${att.originalFileName}`);
+            filePath = await AttachmentService.getOrDownloadAttachment(att.portalAttachmentId, att.originalFileName);
+          }
+
+          if (filePath) {
+            await bot.sendDocument(chatId, filePath, { caption: att.originalFileName });
+          } else {
+            await bot.sendMessage(chatId, `📎 Could not retrieve: ${att.originalFileName}`);
           }
         } catch (err: any) {
           logger.error(`Failed to send attachment ${att.originalFileName}:`, err.message);
