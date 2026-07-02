@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "dist/app.js",
   "scripts": {
-    "start": "node dist/app.js",
+    "start": "npx prisma migrate deploy && node dist/app.js",
     "start:dev": "ts-node src/app.ts",
     "build": "tsc",
     "test": "jest",
