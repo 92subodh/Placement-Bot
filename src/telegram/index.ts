@@ -146,7 +146,10 @@ if (!bot) {
   bot.onText(/^\/latest$/, async (msg) => {
     try {
       const posts = await prisma.post.findMany({
-        orderBy: { portalCreatedAt: 'desc' },
+        orderBy: [
+          { portalCreatedAt: 'desc' },
+          { createdAt: 'desc' } // Tie-breaker for posts with the same date
+        ],
         take: 5,
       });
 
