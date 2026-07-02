@@ -69,11 +69,27 @@ export class ApiService {
   }
 
   public static async getAttachmentDownloadUrl(attachmentId: string): Promise<string> {
+    // Fetch without enforcing responseType so axios auto-detects
     const response = await this.client.get('/api/attachment/download', {
       params: { id: attachmentId },
-      // API returns plain text URL according to spec
-      responseType: 'text'
     });
-    return response.data;
+
+    let url: string = '';
+    const data = response.data;
+
+    if (typeof data === 'string') {
+      // Plain text or JSON-encoded string with surrounding quotes
+      url = data.trim().replace(/^"|"$/g, '');
+    } else if (typeof data === 'object' && data !== null) {
+      // JSON object — try common field names
+      url = data.url || data.downloadUrl || data.signedUrl || data.link || '';
+      logger.debug('Attachment download URL response (object):', JSON.stringify(data));
+    }
+
+    if (!url.startsWith('http')) {
+      logger.error(`Unexpected download URL format for attachment ${attachmentId}. Raw response: ${JSON.stringify(data)}`);
+    }
+
+    return url;
   }
 }
