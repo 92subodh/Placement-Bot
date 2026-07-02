@@ -19,7 +19,6 @@ if (!bot) {
   bot.setMyCommands([
     { command: 'start', description: '🎓 Register and start receiving notifications' },
     { command: 'latest', description: '📋 View the 5 most recent placement posts' },
-    { command: 'status', description: '🤖 Check bot health and statistics' },
     { command: 'help', description: '❓ Show all available commands' },
   ]).then(() => logger.info('Bot command menu registered.'))
     .catch((e) => logger.error('Failed to set bot commands:', e));
@@ -108,21 +107,25 @@ if (!bot) {
   });
 
   // ─── /help ───────────────────────────────────────────────────────────────────
-  bot.onText(/^\/help$/, (msg) => {
+  bot.onText(/^\/help$/, async (msg) => {
+    const user = await getOrCreateUser(msg);
     const helpMessage =
       `*📖 Available Commands:*\n\n` +
       `/start — Register and start receiving notifications\n` +
       `/latest — View the 5 most recent placement posts\n` +
-      `/status — Check bot health and statistics\n` +
-      `/help — Show this message\n\n` +
-      `_Admin only:_\n` +
-      `/setsession \`<token>\` — Update the portal session cookie`;
+      `/help — Show this message\n` +
+      (user.isAdmin ? `\n_Admin only:_\n/status — Check bot health and statistics\n/setsession \`<token>\` — Update the portal session cookie` : ``);
     bot.sendMessage(msg.chat.id, helpMessage, { parse_mode: 'Markdown' });
   });
 
   // ─── /status ─────────────────────────────────────────────────────────────────
   bot.onText(/^\/status$/, async (msg) => {
     try {
+      const user = await getOrCreateUser(msg);
+      if (!user.isAdmin) {
+        return bot.sendMessage(msg.chat.id, '🚫 Unauthorized. Only admins can use this command.');
+      }
+
       const usersCount = await prisma.user.count();
       const postsCount = await prisma.post.count();
       const notifCount = await prisma.notification.count({ where: { status: 'SENT' } });
