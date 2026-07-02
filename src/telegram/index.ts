@@ -50,11 +50,16 @@ if (!bot) {
       return;
     }
 
+    const contentLimit = 3500;
+    const displayContent = post.content && post.content.length > contentLimit
+      ? post.content.substring(0, contentLimit) + '...\n\n_[Message truncated due to length]_'
+      : post.content || 'No details available.';
+
     const message =
       `📢 *Placement Update*\n\n` +
       `🏢 *Title*\n${post.title}\n\n` +
       `📅 *Posted*\n${post.portalCreatedAt.toISOString().split('T')[0]}\n\n` +
-      `📝 *Details*\n${post.content || 'No details available.'}\n\n` +
+      `📝 *Details*\n${displayContent}\n\n` +
       `👤 *Posted By*\n${post.author}`;
 
     await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });

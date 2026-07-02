@@ -88,11 +88,16 @@ export const startScheduler = () => {
             logger.info(`No attachments for post "${savedPost.title}"`);
           }
 
+          const contentLimit = 3500;
+          const displayContent = savedPost.content && savedPost.content.length > contentLimit
+            ? savedPost.content.substring(0, contentLimit) + '...\n\n_[Message truncated due to length]_'
+            : savedPost.content || 'See attachments.';
+
           const message =
             `📢 *New Placement Update*\n\n` +
             `🏢 *Title*\n${savedPost.title}\n\n` +
             `📅 *Posted*\n${savedPost.portalCreatedAt.toISOString().split('T')[0]}\n\n` +
-            `📝 *Details*\n${savedPost.content || 'See attachments.'}\n\n` +
+            `📝 *Details*\n${displayContent}\n\n` +
             `👤 *Posted By*\n${savedPost.author}`;
 
           // Broadcast to channel first
