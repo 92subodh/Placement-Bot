@@ -7,33 +7,40 @@ import { prisma } from '../database';
 import { bot } from '../telegram';
 import { logger } from '../utils/logger';
 
+// Helper: send message + attachments to a single chat
+const sendPostToChat = async (chatId: string, message: string, filesToSend: { path: string; name: string }[]) => {
+  await bot!.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  for (const file of filesToSend) {
+    await bot!.sendDocument(chatId, file.path, { caption: file.name });
+  }
+};
+
 export const startScheduler = () => {
   const checkInterval = process.env.CHECK_INTERVAL || '*/2 * * * *';
 
   cron.schedule(checkInterval, async () => {
-    logger.info('Running scheduled job to fetch latest posts...');
+    logger.info('Checking API for new posts...');
     try {
-      // 1. Fetch latest posts (limit 10 for safety)
       const data = await ApiService.fetchPosts(10, 0);
-      
+
       if (!data || !data.posts) {
         logger.error('Invalid response from /api/post/list');
         return;
       }
 
+      logger.info(`Fetched ${data.posts.length} posts.`);
       const latestPosts = data.posts;
-      
-      for (const post of latestPosts.reverse()) { // Process oldest first to maintain chronological order in notifications
-        // 2. Compare against DB to identify new posts
-        const exists = await prisma.post.findUnique({ where: { id: post.id } });
-        
-        if (!exists) {
-          logger.info(`New post detected: ${post.title}`);
 
-          // 3. Fetch full details
+      for (const post of [...latestPosts].reverse()) {
+        const exists = await prisma.post.findUnique({ where: { id: post.id } });
+
+        if (!exists) {
+          logger.info(`New post detected: "${post.title}"`);
+
+          // Fetch full details
           const details = await ApiService.fetchPostDetails(post.id);
           const plainTextBody = HtmlParserService.parseHtml(details.body || '');
-          
+
           // Save post to DB
           const savedPost = await prisma.post.create({
             data: {
@@ -42,16 +49,18 @@ export const startScheduler = () => {
               content: plainTextBody,
               author: details.userEmail || details.userId || 'Admin',
               portalCreatedAt: new Date(details.createdAt || post.createdAt),
-            }
+            },
           });
 
-          // 4. Fetch attachments
+          // Fetch & save attachment metadata
           const attachmentData = await ApiService.fetchAttachments(details.id);
           const localFilesToCleanup: string[] = [];
-          const filesToSend: { path: string, name: string }[] = [];
+          const filesToSend: { path: string; name: string }[] = [];
 
-          if (attachmentData && attachmentData.attachments) {
+          if (attachmentData?.attachments?.length > 0) {
+            logger.info(`Found ${attachmentData.attachments.length} attachment(s) for post "${savedPost.title}"`);
             for (const att of attachmentData.attachments) {
+              // Save metadata to DB
               await prisma.attachment.create({
                 data: {
                   portalAttachmentId: att.id,
@@ -63,81 +72,77 @@ export const startScheduler = () => {
                   status: att.status,
                   createdAtPortal: new Date(att.createdAt || Date.now()),
                   updatedAtPortal: new Date(att.updatedAt || Date.now()),
-                }
+                },
               });
 
-              // Prepare for download if bot is active
+              // Download file if bot is active
               if (bot) {
+                logger.info(`Downloading attachment: ${att.originalFileName}`);
                 const localPath = await AttachmentService.downloadAttachment(att.id, att.originalFileName);
                 if (localPath) {
                   filesToSend.push({ path: localPath, name: att.originalFileName });
                   localFilesToCleanup.push(localPath);
+                } else {
+                  logger.warn(`Failed to download attachment: ${att.originalFileName}`);
                 }
               }
             }
+          } else {
+            logger.info(`No attachments for post "${savedPost.title}"`);
           }
 
-          // Prepare Message
-          const message = `📢 *New Placement Update*\n\n🏢 *Title*\n${savedPost.title}\n\n📅 *Posted*\n${savedPost.portalCreatedAt.toISOString().split('T')[0]}\n\n📝 *Details*\n${savedPost.content}\n\n👤 *Posted By*\n${savedPost.author}`;
+          const message =
+            `📢 *New Placement Update*\n\n` +
+            `🏢 *Title*\n${savedPost.title}\n\n` +
+            `📅 *Posted*\n${savedPost.portalCreatedAt.toISOString().split('T')[0]}\n\n` +
+            `📝 *Details*\n${savedPost.content || 'See attachments.'}\n\n` +
+            `👤 *Posted By*\n${savedPost.author}`;
 
-          // Broadcast to Channel if configured
+          // Broadcast to channel first
           const channelId = process.env.CHANNEL_ID;
           if (bot && channelId) {
             try {
-              await bot.sendMessage(channelId, message, { parse_mode: 'Markdown' });
-              for (const file of filesToSend) {
-                await bot.sendDocument(channelId, file.path);
-              }
-              logger.info(`Broadcasted post ${savedPost.id} to channel ${channelId}`);
+              await sendPostToChat(channelId, message, filesToSend);
+              logger.info(`Broadcasted to channel ${channelId}`);
             } catch (error: any) {
               logger.error(`Failed to send to channel ${channelId}: ${error.message}`);
             }
           }
 
-          // 5. Match posts against user subscriptions
-          const matchedUsers = await FilterService.getMatchedUsersForPost(savedPost.title, savedPost.content);
-          
-          if (bot && matchedUsers.length > 0) {
+          // Send to matched users
+          if (bot) {
+            const matchedUsers = await FilterService.getMatchedUsersForPost(savedPost.title, savedPost.content);
+            logger.info(`Sending to ${matchedUsers.length} matched user(s).`);
+
             for (const userId of matchedUsers) {
               const user = await prisma.user.findUnique({ where: { id: userId } });
-              if (user && user.telegramId) {
+              if (user?.telegramId) {
                 try {
-                  // Send main message
-                  await bot.sendMessage(user.telegramId, message, { parse_mode: 'Markdown' });
-                  
-                  // Send attachments
-                  for (const file of filesToSend) {
-                    await bot.sendDocument(user.telegramId, file.path);
-                  }
-                  
-                  // Log Notification
+                  await sendPostToChat(user.telegramId, message, filesToSend);
                   await prisma.notification.create({
-                    data: {
-                      postId: savedPost.id,
-                      userId: user.id,
-                      status: 'SENT'
-                    }
+                    data: { postId: savedPost.id, userId: user.id, status: 'SENT' },
                   });
+                  logger.info(`Sent to user ${user.telegramId}`);
                 } catch (error: any) {
-                  logger.error(`Failed to send notification to ${user.telegramId}: ${error.message}`);
+                  logger.error(`Failed to send to user ${user.telegramId}: ${error.message}`);
                   await prisma.notification.create({
-                    data: {
-                      postId: savedPost.id,
-                      userId: user.id,
-                      status: 'FAILED'
-                    }
+                    data: { postId: savedPost.id, userId: user.id, status: 'FAILED' },
                   });
                 }
               }
             }
           }
-          
-          // Cleanup attachments locally
+
+          // Cleanup local temp files AFTER all sends complete
           for (const file of localFilesToCleanup) {
             AttachmentService.cleanupFile(file);
           }
+
+          logger.info(`Finished processing post "${savedPost.title}"`);
         }
       }
+
+      logger.info('Sleeping until next check...');
     } catch (error: any) {
       logger.error('Error during scheduled job:', error.message);
     }

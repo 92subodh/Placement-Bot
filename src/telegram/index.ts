@@ -1,5 +1,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { prisma } from '../database';
+import { ApiService } from '../api/ApiService';
+import { AttachmentService } from '../services/AttachmentService';
 import { logger } from '../utils/logger';
 
 const token = process.env.BOT_TOKEN;
@@ -12,167 +14,184 @@ if (!bot) {
 } else {
   logger.info('Telegram bot initialized and polling started.');
 
-  // Helper to get or create user
+  // Set bot commands menu (appears as the "/" menu button in Telegram)
+  bot.setMyCommands([
+    { command: 'start',   description: '🎓 Register and start receiving notifications' },
+    { command: 'latest',  description: '📋 View the 5 most recent placement posts' },
+    { command: 'status',  description: '🤖 Check bot health and statistics' },
+    { command: 'help',    description: '❓ Show all available commands' },
+  ]).then(() => logger.info('Bot command menu registered.'))
+    .catch((e) => logger.error('Failed to set bot commands:', e));
+
+  // ─── Helper: get or create user ──────────────────────────────────────────────
   const getOrCreateUser = async (msg: TelegramBot.Message) => {
     const chatId = msg.chat.id.toString();
     const user = await prisma.user.findUnique({ where: { telegramId: chatId } });
-    
     if (user) return user;
-
     return await prisma.user.create({
       data: {
         telegramId: chatId,
         firstName: msg.from?.first_name || 'User',
         username: msg.from?.username,
-        // Assume first user is admin for convenience, or they can set it via DB manually later
-      }
+      },
     });
   };
 
-  // /start command
+  // ─── Helper: format and send a full post (with attachments) ──────────────────
+  const sendFullPost = async (chatId: string | number, postId: string) => {
+    const post = await prisma.post.findUnique({
+      where: { id: postId },
+      include: { attachments: true },
+    });
+
+    if (!post) {
+      await bot.sendMessage(chatId, '❌ Post not found.');
+      return;
+    }
+
+    const message =
+      `📢 *Placement Update*\n\n` +
+      `🏢 *Title*\n${post.title}\n\n` +
+      `📅 *Posted*\n${post.portalCreatedAt.toISOString().split('T')[0]}\n\n` +
+      `📝 *Details*\n${post.content || 'No details available.'}\n\n` +
+      `👤 *Posted By*\n${post.author}`;
+
+    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+
+    // Send attachments if any
+    if (post.attachments.length > 0) {
+      await bot.sendMessage(chatId, `📎 *${post.attachments.length} Attachment(s):*`, { parse_mode: 'Markdown' });
+      for (const att of post.attachments) {
+        try {
+          const localPath = await AttachmentService.downloadAttachment(att.portalAttachmentId, att.originalFileName);
+          if (localPath) {
+            await bot.sendDocument(chatId, localPath, { caption: att.originalFileName });
+            AttachmentService.cleanupFile(localPath);
+          }
+        } catch (err: any) {
+          logger.error(`Failed to send attachment ${att.originalFileName}:`, err.message);
+          await bot.sendMessage(chatId, `📎 Could not send: ${att.originalFileName}`);
+        }
+      }
+    }
+  };
+
+  // ─── /start ──────────────────────────────────────────────────────────────────
   bot.onText(/^\/start$/, async (msg) => {
     try {
       await getOrCreateUser(msg);
-      const welcomeMessage = `Welcome to the Placement Notification Bot! 🎓\n\nI will monitor the placement portal and notify you of new updates.\n\nUse /help to see available commands.`;
-      bot.sendMessage(msg.chat.id, welcomeMessage);
+      await bot.sendMessage(
+        msg.chat.id,
+        `👋 Welcome to the *Placement Notification Bot!* 🎓\n\n` +
+        `I automatically monitor the AIT placement portal and notify you the moment a new update is posted.\n\n` +
+        `Use the *menu button* (tap \`/\`) to see all available commands.`,
+        { parse_mode: 'Markdown' }
+      );
     } catch (error) {
       logger.error('Error in /start:', error);
     }
   });
 
-  // /help command
+  // ─── /help ───────────────────────────────────────────────────────────────────
   bot.onText(/^\/help$/, (msg) => {
-    const helpMessage = `
-*Available Commands:*
-/start - Register and start receiving notifications
-/help - Show this message
-/subscribe <keyword> - Add a filter keyword (e.g., /subscribe Amazon)
-/unsubscribe <keyword> - Remove a filter keyword
-/subscriptions - List your active subscriptions
-/latest - Fetch the 5 most recent posts
-/status - Check bot status
-    `;
+    const helpMessage =
+      `*📖 Available Commands:*\n\n` +
+      `/start — Register and start receiving notifications\n` +
+      `/latest — View the 5 most recent placement posts\n` +
+      `/status — Check bot health and statistics\n` +
+      `/help — Show this message\n\n` +
+      `_Admin only:_\n` +
+      `/setsession \`<token>\` — Update the portal session cookie`;
     bot.sendMessage(msg.chat.id, helpMessage, { parse_mode: 'Markdown' });
   });
 
-  // /subscribe <keyword>
-  bot.onText(/^\/subscribe (.+)/, async (msg, match) => {
-    try {
-      const user = await getOrCreateUser(msg);
-      const keyword = match ? match[1].trim() : '';
-
-      if (!keyword) {
-        return bot.sendMessage(msg.chat.id, 'Please provide a keyword. Example: /subscribe Amazon');
-      }
-
-      // Check if already subscribed
-      const existing = await prisma.subscription.findFirst({
-        where: { userId: user.id, keyword: { equals: keyword } } // Note: SQLite is generally case-insensitive in LIKE, but we might just store as is
-      });
-
-      if (existing) {
-        return bot.sendMessage(msg.chat.id, `You are already subscribed to: *${keyword}*`, { parse_mode: 'Markdown' });
-      }
-
-      await prisma.subscription.create({
-        data: { userId: user.id, keyword }
-      });
-
-      bot.sendMessage(msg.chat.id, `✅ Subscribed to: *${keyword}*`, { parse_mode: 'Markdown' });
-    } catch (error) {
-      logger.error('Error in /subscribe:', error);
-    }
-  });
-
-  // /unsubscribe <keyword>
-  bot.onText(/^\/unsubscribe (.+)/, async (msg, match) => {
-    try {
-      const user = await getOrCreateUser(msg);
-      const keyword = match ? match[1].trim() : '';
-
-      const deleted = await prisma.subscription.deleteMany({
-        where: { userId: user.id, keyword }
-      });
-
-      if (deleted.count > 0) {
-        bot.sendMessage(msg.chat.id, `❌ Unsubscribed from: *${keyword}*`, { parse_mode: 'Markdown' });
-      } else {
-        bot.sendMessage(msg.chat.id, `You were not subscribed to: *${keyword}*`, { parse_mode: 'Markdown' });
-      }
-    } catch (error) {
-      logger.error('Error in /unsubscribe:', error);
-    }
-  });
-
-  // /subscriptions
-  bot.onText(/^\/subscriptions$/, async (msg) => {
-    try {
-      const user = await getOrCreateUser(msg);
-      const subs = await prisma.subscription.findMany({ where: { userId: user.id } });
-
-      if (subs.length === 0) {
-        return bot.sendMessage(msg.chat.id, 'You have no active subscriptions. You will receive all updates.');
-      }
-
-      const list = subs.map(s => `- ${s.keyword}`).join('\n');
-      bot.sendMessage(msg.chat.id, `*Your Subscriptions:*\n${list}`, { parse_mode: 'Markdown' });
-    } catch (error) {
-      logger.error('Error in /subscriptions:', error);
-    }
-  });
-
-  // /status
+  // ─── /status ─────────────────────────────────────────────────────────────────
   bot.onText(/^\/status$/, async (msg) => {
     try {
       const usersCount = await prisma.user.count();
       const postsCount = await prisma.post.count();
-      bot.sendMessage(msg.chat.id, `🤖 *Bot Status*\n\nActive Users: ${usersCount}\nProcessed Posts: ${postsCount}\nPolling is Active.`, { parse_mode: 'Markdown' });
+      const notifCount = await prisma.notification.count({ where: { status: 'SENT' } });
+      const hasCookie = !!(await prisma.config.findUnique({ where: { key: 'SESSION_COOKIE' } }));
+      bot.sendMessage(
+        msg.chat.id,
+        `🤖 *Bot Status*\n\n` +
+        `👥 Registered Users: ${usersCount}\n` +
+        `📰 Processed Posts: ${postsCount}\n` +
+        `📨 Notifications Sent: ${notifCount}\n` +
+        `🔑 Portal Auth: ${hasCookie ? '✅ Active' : '❌ No session cookie set'}\n` +
+        `⏱ Polling: Every 2 minutes`,
+        { parse_mode: 'Markdown' }
+      );
     } catch (error) {
       logger.error('Error in /status:', error);
     }
   });
 
-  // /latest
+  // ─── /latest ─────────────────────────────────────────────────────────────────
   bot.onText(/^\/latest$/, async (msg) => {
     try {
       const posts = await prisma.post.findMany({
         orderBy: { portalCreatedAt: 'desc' },
-        take: 5
+        take: 5,
       });
 
       if (posts.length === 0) {
-        return bot.sendMessage(msg.chat.id, 'No posts have been processed yet.');
+        return bot.sendMessage(msg.chat.id, '📭 No posts have been processed yet.\n\nThe bot may still be fetching data. Try again in a couple of minutes.');
       }
 
-      let reply = '*Latest 5 Posts:*\n\n';
-      posts.forEach(p => {
-        reply += `🏢 *${p.title}*\n📅 ${p.portalCreatedAt.toISOString().split('T')[0]}\n\n`;
+      await bot.sendMessage(msg.chat.id, `📋 *Latest ${posts.length} Placement Posts:*\n\n_Tap a button below to read the full post and download attachments._`, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: posts.map((p) => ([{
+            text: `🏢 ${p.title.length > 50 ? p.title.substring(0, 50) + '...' : p.title}`,
+            callback_data: `post:${p.id}`,
+          }])),
+        },
       });
-
-      bot.sendMessage(msg.chat.id, reply, { parse_mode: 'Markdown' });
     } catch (error) {
       logger.error('Error in /latest:', error);
     }
   });
 
-  // Admin command: /setsession
+  // ─── Inline button callback handler ──────────────────────────────────────────
+  bot.on('callback_query', async (query) => {
+    const chatId = query.message?.chat.id;
+    const data = query.data;
+
+    if (!chatId || !data) return;
+
+    // Acknowledge the button press immediately (removes the loading spinner)
+    await bot.answerCallbackQuery(query.id, { text: '⏳ Fetching post...' });
+
+    if (data.startsWith('post:')) {
+      const postId = data.replace('post:', '');
+      try {
+        await sendFullPost(chatId, postId);
+      } catch (error: any) {
+        logger.error('Error handling post callback:', error.message);
+        await bot.sendMessage(chatId, '❌ Failed to fetch post details. Please try again.');
+      }
+    }
+  });
+
+  // ─── Admin: /setsession ───────────────────────────────────────────────────────
   bot.onText(/^\/setsession (.+)/, async (msg, match) => {
     try {
       const user = await getOrCreateUser(msg);
       if (!user.isAdmin) {
-        return bot.sendMessage(msg.chat.id, '🚫 Unauthorized.');
+        return bot.sendMessage(msg.chat.id, '🚫 Unauthorized. Only admins can use this command.');
       }
 
       const sessionToken = match ? match[1].trim() : '';
-      if (!sessionToken) return bot.sendMessage(msg.chat.id, 'Please provide the token.');
+      if (!sessionToken) return bot.sendMessage(msg.chat.id, 'Please provide the session token.');
 
       await prisma.config.upsert({
         where: { key: 'SESSION_COOKIE' },
         update: { value: sessionToken },
-        create: { key: 'SESSION_COOKIE', value: sessionToken }
+        create: { key: 'SESSION_COOKIE', value: sessionToken },
       });
 
-      bot.sendMessage(msg.chat.id, '✅ Session cookie updated successfully!');
+      bot.sendMessage(msg.chat.id, '✅ Session cookie updated successfully! The bot will use it on the next polling cycle.');
     } catch (error) {
       logger.error('Error in /setsession:', error);
     }
