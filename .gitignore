@@ -4,3 +4,4 @@ dist/
 prisma/*.db
 prisma/*.db-journal
 *.db-journal
+placementbot.txt
