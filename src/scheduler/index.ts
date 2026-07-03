@@ -7,9 +7,16 @@ import { prisma } from '../database';
 import { bot } from '../telegram';
 import { logger } from '../utils/logger';
 
+// Helper: escape text for Telegram HTML mode
+const escapeHtml = (text: string): string =>
+  text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
 // Helper: send message + attachments to a single chat
 const sendPostToChat = async (chatId: string, message: string, filesToSend: { path: string; name: string }[]) => {
-  await bot!.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  await bot!.sendMessage(chatId, message, { parse_mode: 'HTML' });
   for (const file of filesToSend) {
     await bot!.sendDocument(chatId, file.path, { caption: file.name });
   }
@@ -115,15 +122,15 @@ export const startScheduler = () => {
 
           const contentLimit = 3500;
           const displayContent = savedPost.content && savedPost.content.length > contentLimit
-            ? savedPost.content.substring(0, contentLimit) + '...\n\n_[Message truncated due to length]_'
+            ? savedPost.content.substring(0, contentLimit) + '...\n\n[Message truncated due to length]'
             : savedPost.content || 'See attachments.';
 
           const message =
-            `📢 *New Placement Update*\n\n` +
-            `🏢 *Title*\n${savedPost.title}\n\n` +
-            `📅 *Posted*\n${savedPost.portalCreatedAt.toISOString().split('T')[0]}\n\n` +
-            `📝 *Details*\n${displayContent}\n\n` +
-            `[🔗 View Original Post on Portal](https://www.aitplacements.in/)`;
+            `📢 <b>New Placement Update</b>\n\n` +
+            `🏢 <b>Title</b>\n${escapeHtml(savedPost.title)}\n\n` +
+            `📅 <b>Posted</b>\n${savedPost.portalCreatedAt.toISOString().split('T')[0]}\n\n` +
+            `📝 <b>Details</b>\n${escapeHtml(displayContent)}\n\n` +
+            `<a href="https://www.aitplacements.in/">🔗 View Original Post on Portal</a>`;
 
           // Broadcast to channel first
           const channelId = process.env.CHANNEL_ID;

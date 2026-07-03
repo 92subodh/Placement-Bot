@@ -37,6 +37,13 @@ if (!bot) {
     });
   };
 
+  // ─── Helper: escape text for Telegram HTML mode ─────────────────────────────
+  const escapeHtml = (text: string): string =>
+    text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
   // ─── Helper: format and send a full post (with attachments) ──────────────────
   const sendFullPost = async (chatId: string | number, postId: string) => {
     const post = await prisma.post.findUnique({
@@ -50,22 +57,22 @@ if (!bot) {
     }
 
     const contentLimit = 3500;
-    const displayContent = post.content && post.content.length > contentLimit
-      ? post.content.substring(0, contentLimit) + '...\n\n_[Message truncated due to length]_'
+    const rawContent = post.content && post.content.length > contentLimit
+      ? post.content.substring(0, contentLimit) + '...\n\n[Message truncated due to length]'
       : post.content || 'No details available.';
 
     const message =
-      `📢 *Placement Update*\n\n` +
-      `🏢 *Title*\n${post.title}\n\n` +
-      `📅 *Posted*\n${post.portalCreatedAt.toISOString().split('T')[0]}\n\n` +
-      `📝 *Details*\n${displayContent}\n\n` +
-      `[🔗 View Original Post on Portal](https://www.aitplacements.in/)`;
+      `📢 <b>Placement Update</b>\n\n` +
+      `🏢 <b>Title</b>\n${escapeHtml(post.title)}\n\n` +
+      `📅 <b>Posted</b>\n${post.portalCreatedAt.toISOString().split('T')[0]}\n\n` +
+      `📝 <b>Details</b>\n${escapeHtml(rawContent)}\n\n` +
+      `<a href="https://www.aitplacements.in/">🔗 View Original Post on Portal</a>`;
 
-    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
 
     // Send attachments if any
     if (post.attachments.length > 0) {
-      await bot.sendMessage(chatId, `📎 *${post.attachments.length} Attachment(s):*`, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, `📎 <b>${post.attachments.length} Attachment(s):</b>`, { parse_mode: 'HTML' });
       for (const att of post.attachments) {
         try {
           // Use saved local path if file still exists on disk
