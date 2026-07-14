@@ -56,19 +56,30 @@ if (!bot) {
       return;
     }
 
-    const contentLimit = 3500;
-    const rawContent = post.content && post.content.length > contentLimit
-      ? post.content.substring(0, contentLimit) + '...\n\n[Message truncated due to length]'
-      : post.content || 'No details available.';
+    const rawContent = post.content || 'No details available.';
+    const contentChunks = [];
+    const chunkSize = 3500;
+    for (let i = 0; i < rawContent.length; i += chunkSize) {
+      contentChunks.push(rawContent.substring(i, i + chunkSize));
+    }
 
-    const message =
+    const firstMessage =
       `📢 <b>Placement Update</b>\n\n` +
       `🏢 <b>Title</b>\n${escapeHtml(post.title)}\n\n` +
       `📅 <b>Posted</b>\n${post.portalCreatedAt.toISOString().split('T')[0]}\n\n` +
-      `📝 <b>Details</b>\n${escapeHtml(rawContent)}\n\n` +
-      `<a href="https://www.aitplacements.in/">🔗 View Original Post on Portal</a>`;
+      `📝 <b>Details</b>\n${escapeHtml(contentChunks[0])}` +
+      (contentChunks.length === 1 ? `\n\n<a href="https://www.aitplacements.in/">🔗 View Original Post on Portal</a>` : ``);
 
-    await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+    await bot.sendMessage(chatId, firstMessage, { parse_mode: 'HTML' });
+
+    for (let i = 1; i < contentChunks.length; i++) {
+      const isLast = i === contentChunks.length - 1;
+      const partMessage =
+        `${escapeHtml(contentChunks[i])}` +
+        (isLast ? `\n\n<a href="https://www.aitplacements.in/">🔗 View Original Post on Portal</a>` : ``);
+      
+      await bot.sendMessage(chatId, partMessage, { parse_mode: 'HTML' });
+    }
 
     // Send attachments if any
     if (post.attachments.length > 0) {

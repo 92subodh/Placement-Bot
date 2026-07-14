@@ -14,9 +14,11 @@ const escapeHtml = (text: string): string =>
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 
-// Helper: send message + attachments to a single chat
-const sendPostToChat = async (chatId: string, message: string, filesToSend: { path: string; name: string }[]) => {
-  await bot!.sendMessage(chatId, message, { parse_mode: 'HTML' });
+// Helper: send messages + attachments to a single chat
+const sendPostToChat = async (chatId: string, messages: string[], filesToSend: { path: string; name: string }[]) => {
+  for (const msg of messages) {
+    await bot!.sendMessage(chatId, msg, { parse_mode: 'HTML' });
+  }
   for (const file of filesToSend) {
     await bot!.sendDocument(chatId, file.path, { caption: file.name });
   }
@@ -120,23 +122,34 @@ export const startScheduler = () => {
             logger.info(`No attachments for post "${savedPost.title}"`);
           }
 
-          const contentLimit = 3500;
-          const displayContent = savedPost.content && savedPost.content.length > contentLimit
-            ? savedPost.content.substring(0, contentLimit) + '...\n\n[Message truncated due to length]'
-            : savedPost.content || 'See attachments.';
+          const rawContent = savedPost.content || 'See attachments.';
+          const contentChunks = [];
+          for (let i = 0; i < rawContent.length; i += 3500) {
+            contentChunks.push(rawContent.substring(i, i + 3500));
+          }
 
-          const message =
+          const messages = [];
+          const firstMessage =
             `📢 <b>New Placement Update</b>\n\n` +
             `🏢 <b>Title</b>\n${escapeHtml(savedPost.title)}\n\n` +
             `📅 <b>Posted</b>\n${savedPost.portalCreatedAt.toISOString().split('T')[0]}\n\n` +
-            `📝 <b>Details</b>\n${escapeHtml(displayContent)}\n\n` +
-            `<a href="https://www.aitplacements.in/">🔗 View Original Post on Portal</a>`;
+            `📝 <b>Details</b>\n${escapeHtml(contentChunks[0])}` +
+            (contentChunks.length === 1 ? `\n\n<a href="https://www.aitplacements.in/">🔗 View Original Post on Portal</a>` : ``);
+          messages.push(firstMessage);
+
+          for (let i = 1; i < contentChunks.length; i++) {
+            const isLast = i === contentChunks.length - 1;
+            const partMessage =
+              `${escapeHtml(contentChunks[i])}` +
+              (isLast ? `\n\n<a href="https://www.aitplacements.in/">🔗 View Original Post on Portal</a>` : ``);
+            messages.push(partMessage);
+          }
 
           // Broadcast to channel first
           const channelId = process.env.CHANNEL_ID;
           if (bot && channelId) {
             try {
-              await sendPostToChat(channelId, message, filesToSend);
+              await sendPostToChat(channelId, messages, filesToSend);
               logger.info(`Broadcasted to channel ${channelId}`);
             } catch (error: any) {
               logger.error(`Failed to send to channel ${channelId}: ${error.message}`);
@@ -152,7 +165,7 @@ export const startScheduler = () => {
               const user = await prisma.user.findUnique({ where: { id: userId } });
               if (user?.telegramId) {
                 try {
-                  await sendPostToChat(user.telegramId, message, filesToSend);
+                  await sendPostToChat(user.telegramId, messages, filesToSend);
                   await prisma.notification.create({
                     data: { postId: savedPost.id, userId: user.id, status: 'SENT' },
                   });
